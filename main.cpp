@@ -14,7 +14,6 @@ class static_memory_pool
 private:
     struct free_block_header
     {
-        static const size_t COOKIE = 0xbabebabebabebabe;
         size_t size;
         free_block_header *next;
     };
@@ -71,35 +70,43 @@ public:
         requested_size += ALIGNMENT_MASK & ~ALIGNMENT_MASK;
 
         free_block_header *prev = nullptr;
-        free_block_header *hdr = _free_list;
+        free_block_header *it = _free_list;
 
-        while( hdr != nullptr )
+        while( it != nullptr )
         {
-            if( hdr->size >= requested_size )
+            if( it->size >= requested_size )
             {
-                //remove header from list
-                result = hdr + ALIGNED_HEADER_SIZE;
+                //move pointer to after the header
+                result = reinterpret_cast<uint8_t*>(it) + ALIGNED_HEADER_SIZE;
 
 
-                if( hdr->next == nullptr )
+                if( it->next == nullptr )
                 {
-                    free_block_header *next = reinterpret_cast<free_block_header *>(hdr + requested_size);
+                    // TODO: check that next block is within bounds of buffer
+                    // TODO: determine size of the next free block
+                    free_block_header *next = reinterpret_cast<free_block_header *>(
+						reinterpret_cast<uint8_t*>(it) + requested_size);
+
                     next->next = nullptr;
-                    hdr->next = next;
+                    it->next = next;
                 }
 
                 // Set the upper most bit to indicate that it is allocated
-                hdr->size = requested_size | ALLOCATED_FLAG;
+                it->size = requested_size | ALLOCATED_FLAG;
 
                 if(prev != nullptr)
-                    prev->next = hdr->next;
-                hdr->next = nullptr;
+                    prev->next = it->next;
+                it->next = nullptr;
                 break;
             }
-            prev = hdr;
-            hdr = hdr->next;
+
+            prev = it;
+            it = it->next;
         }
 
+
+		free_block_header *xx = reinterpret_cast<free_block_header *>(
+			reinterpret_cast<uint8_t*>(result) - ALIGNED_HEADER_SIZE);
 
         return result;
     }
@@ -114,11 +121,6 @@ public:
         }
 
         free_block_header *hdr = reinterpret_cast<free_block_header *>( addr - ALIGNED_HEADER_SIZE );
-        if( hdr->COOKIE != free_block_header::COOKIE )
-        {
-            std::cout << "Pointer mismatch, header not found\n";
-            return;
-        }
 
         if( !(hdr->size & ALLOCATED_FLAG) )
         {
@@ -153,6 +155,7 @@ void operator delete  ( void* ptr )
 int main(int argc, char const *argv[])
 {
     int *x = new int(34);
+	delete x;
     std::cout << *x << std::endl;
     return 0;
 }

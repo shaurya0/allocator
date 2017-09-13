@@ -110,7 +110,7 @@ namespace ss
 			_allocated = 0;
 			_deallocated = 0;
 			_free_list = reinterpret_cast<free_block_header*>(_buffer);
-			_free_list->set_size( POOL_SIZE );
+			_free_list->set_size( POOL_SIZE - ALIGNED_HEADER_SIZE );
 			_free_list->set_next( nullptr );
 			_free_list->set_prev( nullptr );
 		}
@@ -147,26 +147,24 @@ namespace ss
 
 			while (it != nullptr)
 			{
-				if (false == it->is_allocated() && it->get_size() >= requested_size)
+				if (false == it->is_allocated() && it->get_size() >= requested_size_with_header)
 				{
 					//move data pointer to after the header
 					result = reinterpret_cast<uint8_t*>(it) + ALIGNED_HEADER_SIZE;
+					_allocated += requested_size;
+					const size_t remaining_size = (it->get_size() - requested_size_with_header);
 
-					if (it->get_next() == nullptr)
+					if (it->get_next() == nullptr || it->get_size() > requested_size_with_header)
 					{
 						free_block_header *next = reinterpret_cast<free_block_header*>(
-							reinterpret_cast<uint8_t*>(it) + requested_size_with_header);
+							reinterpret_cast<uint8_t*>(result) + requested_size);
 
 
-						if ((BUFFER_END - ALIGNED_HEADER_SIZE) < reinterpret_cast<uintptr_t>(next))
-						{
-							// out of memory
-							return nullptr;
-						}
-
-						_allocated += requested_size;
-
-						const size_t remaining_size = (it->get_size() - requested_size);
+						// if ((BUFFER_END - ALIGNED_HEADER_SIZE) < reinterpret_cast<uintptr_t>(next))
+						// {
+						// 	// out of memory
+						// 	return nullptr;
+						// }
 
 						next->set_size(remaining_size);
 						next->set_next(nullptr);
@@ -206,22 +204,46 @@ namespace ss
 				throw std::runtime_error("Tried to deallocate unallocated pointer");
 			}
 
-			_deallocated += hdr->get_size();
+			size_t block_size = hdr->get_size();
+			_deallocated += block_size;
 
 			// coalesce
-			free_block_header *next_block = hdr->get_next();
-			if (false == next_block->is_allocated())
+			free_block_header *next_it = hdr->get_next();
+			while ( next_it != nullptr && false == next_it->is_allocated() )
 			{
-				const size_t next_size = next_block->get_size();
-				hdr->set_size(hdr->get_size() + next_size);
-
-				next_block->set_size(0);
-
-				hdr->set_next(next_block->get_next());
+				block_size += next_it->get_size();
+				next_it = next_it->get_next();
 			}
+			hdr->set_next(next_it);
+
+			free_block_header *prev_it = hdr->get_prev();
+			while ( prev_it != nullptr && false == prev_it->is_allocated() )
+			{
+				block_size += prev_it->get_size();
+				prev_it = prev_it->get_prev();
+			}
+
+			//Can move free block backwards
+			if( prev_it != nullptr && prev_it != hdr->get_prev() )
+			{
+				hdr->set_prev( prev_it->get_prev() );
+				hdr = prev_it;
+			}
+			else if( prev_it == nullptr && prev_it != hdr->get_prev() )
+			{
+				//Can move free block to start of free list
+				hdr = _free_list;
+			}
+
+ 			if( next_it != nullptr )
+ 			{
+ 				next_it->set_prev( hdr );
+ 			}
+
+			hdr->set_size(block_size);
 		}
 
-		#ifdef UNIT_TEST
+		// for debugging
 		free_block_header *free_list () const noexcept
 		{
 			return _free_list;
@@ -229,7 +251,5 @@ namespace ss
 
 		const size_t allocated() const noexcept { return _allocated; }
 		const size_t deallocated() const noexcept { return _deallocated; }
-
-		#endif
 	};
 }

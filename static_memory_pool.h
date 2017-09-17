@@ -33,7 +33,7 @@ namespace ss
 			{
 				if( allocated )
 				{
-					// Set the upper most bit to indicate that it is allocated
+					// Set the upper most bit to indicate that the block is allocated
 					_size = (new_size | ALLOCATED_FLAG);
 				}
 				else
@@ -57,7 +57,7 @@ namespace ss
 				return _next;
 			}
 
-			void set_next(free_block_header *next)
+			void set_next(free_block_header *const next)
 			{
 				_next = next;
 			}
@@ -72,7 +72,7 @@ namespace ss
 				return _prev;
 			}
 
-			void set_prev(free_block_header *prev)
+			void set_prev(free_block_header *const prev)
 			{
 				_prev = prev;
 			}
@@ -126,7 +126,7 @@ namespace ss
 			return (addr >= (BUFFER_START + ALIGNED_HEADER_SIZE) && addr < (BUFFER_END - ALIGNED_HEADER_SIZE));
 		}
 
-		void *allocate(size_t requested_size) noexcept
+		void *allocate(size_t requested_size)
 		{
 			if (requested_size == 0)
 				return nullptr;
@@ -140,9 +140,7 @@ namespace ss
 			size_t requested_size_with_header = requested_size + ALIGNED_HEADER_SIZE;
 			requested_size_with_header += ALIGNMENT_MASK & ~ALIGNMENT_MASK;
 
-			free_block_header *prev = nullptr;
 			free_block_header *it = _free_list;
-
 			void *result = nullptr;
 
 			while (it != nullptr)
@@ -151,36 +149,39 @@ namespace ss
 				{
 					//move data pointer to after the header
 					result = reinterpret_cast<uint8_t*>(it) + ALIGNED_HEADER_SIZE;
+
 					_allocated += requested_size;
 					const size_t remaining_size = (it->get_size() - requested_size_with_header);
 
-					if (it->get_next() == nullptr || it->get_size() > requested_size_with_header)
+					// create new block
+					free_block_header *next = it->get_next();
+					if (next == nullptr || it->get_size() > requested_size)
 					{
-						free_block_header *next = reinterpret_cast<free_block_header*>(
+						free_block_header *new_block = reinterpret_cast<free_block_header*>(
 							reinterpret_cast<uint8_t*>(result) + requested_size);
 
 
-						// if ((BUFFER_END - ALIGNED_HEADER_SIZE) < reinterpret_cast<uintptr_t>(next))
-						// {
-						// 	// out of memory
-						// 	return nullptr;
-						// }
+						 if ((BUFFER_END - ALIGNED_HEADER_SIZE) < reinterpret_cast<uintptr_t>(new_block))
+						 {
+						 	throw std::runtime_error( "out of memory" );
+						 }
 
-						next->set_size(remaining_size);
-						next->set_next(nullptr);
-						next->set_prev(it);
-						it->set_next(next);
+						it->set_next(new_block);
+						it->set_size(requested_size, true);
+
+						new_block->set_size(remaining_size);
+						new_block->set_next(next);
+						new_block->set_prev(it);
+
+						if (next != nullptr)
+						{
+							next->set_prev(new_block);
+						}
 					}
-
-					it->set_size(requested_size, true);
-
-					if (prev != nullptr)
-						prev->set_next( it );
 
 					break;
 				}
 
-				prev = it;
 				it = it->get_next();
 			}
 
@@ -207,32 +208,35 @@ namespace ss
 			size_t block_size = hdr->get_size();
 			_deallocated += block_size;
 
-			// coalesce
+			// coalesce blocks ahead
 			free_block_header *next_it = hdr->get_next();
 			while ( next_it != nullptr && false == next_it->is_allocated() )
 			{
-				block_size += next_it->get_size();
+				block_size += next_it->get_size() + ALIGNED_HEADER_SIZE;
 				next_it = next_it->get_next();
 			}
-			hdr->set_next(next_it);
 
+			// coalesce blocks behind
 			free_block_header *prev_it = hdr->get_prev();
 			while ( prev_it != nullptr && false == prev_it->is_allocated() )
 			{
-				block_size += prev_it->get_size();
+				block_size += prev_it->get_size() + ALIGNED_HEADER_SIZE;
 				prev_it = prev_it->get_prev();
 			}
 
 			//Can move free block backwards
-			if( prev_it != nullptr && prev_it != hdr->get_prev() )
+			if (prev_it != hdr->get_prev())
 			{
-				hdr->set_prev( prev_it->get_prev() );
-				hdr = prev_it;
-			}
-			else if( prev_it == nullptr && prev_it != hdr->get_prev() )
-			{
-				//Can move free block to start of free list
-				hdr = _free_list;
+				if( prev_it != nullptr )
+				{
+					hdr->set_prev( prev_it->get_prev() );
+					prev_it = hdr;
+				}
+				else if( prev_it == nullptr )
+				{
+					//Can move free block to start of free list
+					hdr = _free_list;
+				}
 			}
 
  			if( next_it != nullptr )
@@ -240,6 +244,7 @@ namespace ss
  				next_it->set_prev( hdr );
  			}
 
+			hdr->set_next(next_it);
 			hdr->set_size(block_size);
 		}
 

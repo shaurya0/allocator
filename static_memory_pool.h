@@ -126,7 +126,7 @@ namespace ss
 			return (addr >= (BUFFER_START + ALIGNED_HEADER_SIZE) && addr < (BUFFER_END - ALIGNED_HEADER_SIZE));
 		}
 
-		void *allocate(size_t requested_size)
+		void *allocate(size_t requested_size, bool throw_exception = false)
 		{
 			if (requested_size == 0)
 				return nullptr;
@@ -151,23 +151,31 @@ namespace ss
 					result = reinterpret_cast<uint8_t*>(it) + ALIGNED_HEADER_SIZE;
 
 					_allocated += requested_size;
-					const size_t remaining_size = (it->get_size() - requested_size_with_header);
-
+					
 					// create new block
 					free_block_header *next = it->get_next();
 					if (next == nullptr || it->get_size() > requested_size)
 					{
 						free_block_header *new_block = reinterpret_cast<free_block_header*>(
 							reinterpret_cast<uint8_t*>(result) + requested_size);
-
+						
+						const size_t remaining_size = (it->get_size() - requested_size_with_header);
 
 						 if ((BUFFER_END - ALIGNED_HEADER_SIZE) < reinterpret_cast<uintptr_t>(new_block))
 						 {
-						 	throw std::runtime_error( "out of memory" );
+							 if (throw_exception)
+							 {
+						 		throw std::bad_alloc();
+							 }
+							 else
+							 {
+								 return nullptr;
+							 }
 						 }
 
 						it->set_next(new_block);
 						it->set_size(requested_size, true);
+
 
 						new_block->set_size(remaining_size);
 						new_block->set_next(next);
@@ -189,12 +197,19 @@ namespace ss
 		}
 
 
-		void deallocate(void *p)
+		void deallocate(void *p, bool throw_exception = false)
 		{
 			const uintptr_t addr = reinterpret_cast<uintptr_t>(p);
 			if ( false == is_inside_pool(addr) )
 			{
-				throw std::runtime_error("Tried to deallocate pointer outside of static buffer range\n");
+				static constexpr const char* msg = "Tried to deallocate pointer outside of static buffer range";
+				if (throw_exception)
+					throw std::runtime_error(msg);
+				else
+				{
+					std::cerr << msg << std::endl;
+					return;
+				}
 			}
 
 			free_block_header *hdr = reinterpret_cast<free_block_header *>(
@@ -202,7 +217,14 @@ namespace ss
 
 			if (false == hdr->is_allocated())
 			{
-				throw std::runtime_error("Tried to deallocate unallocated pointer");
+				static constexpr const char* msg = "Tried to deallocate unallocated pointer";
+				if (throw_exception)
+					throw std::runtime_error(msg);
+				else
+				{
+					std::cerr << msg << std::endl;
+					return;
+				}
 			}
 
 			size_t block_size = hdr->get_size();
@@ -224,25 +246,20 @@ namespace ss
 				prev_it = prev_it->get_prev();
 			}
 
-			//Can move free block backwards
-			if (prev_it != hdr->get_prev())
+			//Can move free block to start of free list
+			if (prev_it == nullptr)
 			{
-				if( prev_it != nullptr )
-				{
-					hdr->set_prev( prev_it->get_prev() );
-					prev_it = hdr;
-				}
-				else if( prev_it == nullptr )
-				{
-					//Can move free block to start of free list
-					hdr = _free_list;
-				}
+				hdr = _free_list;
+			}
+			//Can move free block backwards
+			else if (prev_it != hdr->get_prev())
+			{
+				hdr->set_prev( prev_it->get_prev() );
+				prev_it = hdr;
 			}
 
  			if( next_it != nullptr )
- 			{
  				next_it->set_prev( hdr );
- 			}
 
 			hdr->set_next(next_it);
 			hdr->set_size(block_size);

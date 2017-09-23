@@ -1,5 +1,6 @@
 *
 !*.hpp
+!thirdparty
 !*.cpp
 !*.h
 !CMakeLists.txt
